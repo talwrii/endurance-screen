@@ -8,7 +8,6 @@ import threading
 import re
 
 app = Flask(__name__)
-# Secret key is still needed for Flask internals, even without login
 app.secret_key = os.urandom(24)
 
 REMINDERS_FILE = 'reminders.txt'
@@ -49,9 +48,10 @@ HTML_INDEX = """
 <html>
 <head>
     <title>Endurance Screen</title>
-    <meta http-equiv="refresh" content="60">
+    <meta http-equiv="refresh" content="300">
     <script>
         const currentHash = "{{ page_hash }}";
+        const nextTargetStr = "{{ next_target }}"; // ISO string from server
         
         function setStatus(status) {
             const el = document.getElementById('status-dot');
@@ -82,7 +82,56 @@ HTML_INDEX = """
                 setTimeout(waitForUpdate, 5000);
             }
         }
-        window.addEventListener('load', waitForUpdate);
+
+        // T-MINUS COUNTDOWN LOGIC (Updates every 60s)
+        function updateCountdown() {
+            if (!nextTargetStr || nextTargetStr === 'None') return;
+
+            const target = new Date(nextTargetStr);
+            const now = new Date();
+            const diff = target - now;
+
+            const el = document.getElementById('countdown-display');
+            if (!el) return;
+
+            if (diff <= 0) {
+                el.innerText = "NOW";
+                el.className = "countdown blinking";
+                return;
+            }
+
+            const totalMinutes = Math.floor(diff / (1000 * 60));
+            const hours = Math.floor(totalMinutes / 60);
+            const minutes = totalMinutes % 60;
+
+            // Format: "T- 1h 45m" or just "T- 45m" if less than an hour
+            if (hours > 0) {
+                el.innerText = `T- ${hours}h ${minutes}m`;
+            } else {
+                el.innerText = `T- ${minutes}m`;
+            }
+            
+            // Blink if less than 5 minutes
+            if (hours === 0 && minutes < 5) {
+                el.className = "countdown blinking";
+            } else {
+                el.className = "countdown";
+            }
+        }
+
+        window.addEventListener('load', () => {
+            waitForUpdate();
+            // Align the update to the start of the next minute for precision
+            const now = new Date();
+            const secondsUntilNextMinute = 60 - now.getSeconds();
+            
+            updateCountdown(); // Run immediately on load
+            
+            setTimeout(() => {
+                updateCountdown();
+                setInterval(updateCountdown, 60000); // Run every 60s thereafter
+            }, secondsUntilNextMinute * 1000);
+        });
     </script>
     <style>
         body { 
@@ -102,20 +151,8 @@ HTML_INDEX = """
             border-bottom: 2px solid #333; 
             padding-bottom: 20px; 
         }
-        .goal { 
-            font-size: 2.5em; 
-            font-weight: bold; 
-            color: #fff; 
-            margin: 0; 
-            text-transform: uppercase; 
-            letter-spacing: 2px; 
-        }
-        .reason { 
-            font-size: 1.4em; 
-            color: #888; 
-            margin-top: 10px; 
-            font-style: italic; 
-        }
+        .goal { font-size: 2.5em; font-weight: bold; color: #fff; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
+        .reason { font-size: 1.4em; color: #888; margin-top: 10px; font-style: italic; }
 
         .cal-container { margin-top: 20px; display: flex; align-items: center; justify-content: center; gap: 15px; }
         .cal-text { font-size: 1.5em; font-family: monospace; color: #0ff; }
@@ -135,15 +172,23 @@ HTML_INDEX = """
             margin-bottom: 25px; 
             border-bottom: 1px solid #222; 
             padding-bottom: 20px; 
+            position: relative;
         }
-        .time { 
-            color: #f00; 
-            font-weight: bold; 
-            display: block; 
-            margin-bottom: 10px; 
-        }
+        .time { color: #f00; font-weight: bold; display: block; margin-bottom: 10px; }
         .desc { color: #ddd; }
         
+        /* The Countdown Badge */
+        .countdown {
+            font-size: 0.4em; /* Relative to the huge 4em parent */
+            color: #ff9900;
+            display: block;
+            margin-top: 10px;
+            font-family: monospace;
+            font-weight: bold;
+        }
+        .blinking { animation: blinker 1s linear infinite; color: #f00; }
+        @keyframes blinker { 50% { opacity: 0; } }
+
         .more { color: #555; font-size: 1.5em; margin-top: auto; }
         .empty { color: #444; margin-top: 100px; font-size: 2em; }
         
@@ -176,6 +221,23 @@ HTML_INDEX = """
                 <div class="reminder">
                     <span class="time">{{ r.time_str }}</span>
                     <span class="desc">{{ r.description }}</span>
+                    
+                    {% if loop.index0 == 0 %}
+                        <span id="countdown-display" class="countdown">
+                        {% if time_diff_minutes is not none %}
+                            {% if time_diff_minutes <= 0 %}
+                                NOW
+                            {% else %}
+                                T- 
+                                {% if time_diff_minutes >= 60 %}
+                                    {{ (time_diff_minutes // 60)|int }}h {{ (time_diff_minutes % 60)|int }}m
+                                {% else %}
+                                    {{ time_diff_minutes|int }}m
+                                {% endif %}
+                            {% endif %}
+                        {% endif %}
+                        </span>
+                    {% endif %}
                 </div>
             {% endfor %}
         {% else %}
@@ -229,7 +291,6 @@ def get_file_content_safe():
         return content if content.strip() else DEFAULT_CONTENT
 
 def extract_calories(text):
-    """Finds integers followed by 'cal' or 'kcal' (case insensitive)"""
     match = re.search(r'\b(\d+)\s*(?:k?cal)\b', text, re.IGNORECASE)
     if match:
         return int(match.group(1))
@@ -358,6 +419,23 @@ def index():
     current_content = get_file_content_safe()
     page_hash = calculate_hash(current_content)
     
+    next_target = None
+    time_diff_minutes = None
+
+    if reminders:
+        next_event = reminders[0]['time']
+        next_target = next_event.isoformat()
+        
+        # Calculate time diff for server-side render
+        now = datetime.now()
+        diff = next_event - now
+        total_seconds = diff.total_seconds()
+        
+        if total_seconds > 0:
+            time_diff_minutes = int(total_seconds // 60)
+        else:
+            time_diff_minutes = 0
+
     return render_template_string(HTML_INDEX, 
                                 goal=goal,
                                 reason=reason,
@@ -365,11 +443,12 @@ def index():
                                 calories_eaten=calories_eaten,
                                 display_reminders=display_reminders,
                                 remaining_count=remaining_count,
-                                page_hash=page_hash)
+                                page_hash=page_hash,
+                                next_target=next_target,
+                                time_diff_minutes=time_diff_minutes)
 
 @app.route('/edit', methods=['GET', 'POST'])
 def edit():
-    # NO AUTHENTICATION CHECK
     if request.method == 'POST' and 'save' in request.form:
         content = request.form.get('content', '')
         with open(REMINDERS_FILE, 'w') as f:
