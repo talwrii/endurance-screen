@@ -7,13 +7,12 @@ import os
 import tempfile
 import subprocess
 import requests
-from urllib.parse import urljoin
-
+import argparse
+import webbrowser
 
 def get_editor():
     """Get the user's preferred editor"""
     return os.environ.get('EDITOR', 'vim')
-
 
 def fetch_file(url):
     """Fetch file content and hash from server"""
@@ -26,32 +25,24 @@ def fetch_file(url):
         print(f"Error fetching file: {e}", file=sys.stderr)
         sys.exit(1)
     except (KeyError, ValueError) as e:
-        print(f"Invalid response from server: {e}", file=sys.stderr)
+        print(f"Invalid response from server. Did you use the right URL?\nError: {e}", file=sys.stderr)
         sys.exit(1)
-
 
 def edit_content(content):
     """Open content in editor and return edited version"""
     editor = get_editor()
     
-    # Create temporary file
     with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
         f.write(content)
         temp_path = f.name
     
     try:
-        # Open editor
         subprocess.run([editor, temp_path], check=True)
-        
-        # Read edited content
         with open(temp_path, 'r') as f:
             edited_content = f.read()
-        
         return edited_content
     finally:
-        # Clean up temp file
         os.unlink(temp_path)
-
 
 def push_file(url, content, file_hash):
     """Push edited content back to server"""
@@ -63,12 +54,10 @@ def push_file(url, content, file_hash):
         )
         
         if response.status_code == 409:
-            # Conflict - file was modified
             data = response.json()
             print("⚠️  CONFLICT: File has been modified on server", file=sys.stderr)
             print(f"\nCurrent server content:\n{data['current_content']}", file=sys.stderr)
             print("\nYour changes were not saved.", file=sys.stderr)
-            print("Fetch the file again to see current version.", file=sys.stderr)
             sys.exit(1)
         
         response.raise_for_status()
@@ -79,20 +68,30 @@ def push_file(url, content, file_hash):
         print(f"Error pushing file: {e}", file=sys.stderr)
         sys.exit(1)
 
-
 def main():
-    """Main CLI entry point"""
-    if len(sys.argv) != 2:
-        print("Usage: endure <url>", file=sys.stderr)
-        print("\nExample:", file=sys.stderr)
-        print("  endure https://yourserver.com/api/reminders", file=sys.stderr)
-        sys.exit(1)
+    parser = argparse.ArgumentParser(description="Endure CLI")
+    parser.add_argument("url", help="The URL of the endurance server (e.g. http://endure:1024)")
+    parser.add_argument("--web", action="store_true", help="Open the web editor in your browser instead of CLI")
+    args = parser.parse_args()
     
-    url = sys.argv[1]
-    
-    # Ensure URL has scheme
+    # 1. Clean the base URL
+    url = args.url.rstrip('/')
     if not url.startswith(('http://', 'https://')):
         url = 'http://' + url
+
+    # 2. Handle Web Mode
+    if args.web:
+        # Strip API endpoint if user accidentally included it, then add /edit
+        base_url = url.split('/api/')[0]
+        web_url = f"{base_url}/edit"
+        print(f"Opening web editor at {web_url}...")
+        webbrowser.open(web_url)
+        sys.exit(0)
+
+    # 3. Handle CLI Mode
+    # Automatically append API endpoint if not present
+    if not url.endswith('/api/reminders'):
+        url = f"{url}/api/reminders"
     
     print(f"Fetching {url}...")
     content, file_hash = fetch_file(url)
@@ -100,14 +99,12 @@ def main():
     print(f"Opening in {get_editor()}...")
     edited_content = edit_content(content)
     
-    # Check if content changed
     if edited_content == content:
         print("No changes made.")
         sys.exit(0)
     
     print("Saving changes...")
     push_file(url, edited_content, file_hash)
-
 
 if __name__ == '__main__':
     main()
