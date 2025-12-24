@@ -1,7 +1,7 @@
 # endurance-screen
-If you are doing something difficult you might need some help enduring. 
+If you are doing something difficult you might need some help enduring the activity.
 
-This is a little tool to create a heads up display for your plan to endure. This is inspired by the expeience of planning what I am going to eat and when as an alternative to hunger cutting hard.
+This is a little tool to create a heads up display for your plan to endure. This is inspired by the expeience of planning what I am going to eat and when as an alternative to hunger cutting hard. I am also reminded of Jim Carrey talking about the makeup he wore for the grinch where a torture expert gave him tricks to help him endure.
 
 ## Installation
 You can install this with `pipx`.
