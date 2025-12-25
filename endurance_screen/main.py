@@ -50,11 +50,11 @@ HTML_INDEX = """
     <title>Endurance Screen</title>
     <meta http-equiv="refresh" content="300">
     <script>
-        const currentHash = "{{ page_hash }}";
-        const nextTargetStr = "{{ next_target }}"; // ISO string from server
+        var currentHash = "{{ page_hash }}";
+        var nextTargetStr = "{{ next_target }}"; // ISO string from server
         
         function setStatus(status) {
-            const el = document.getElementById('status-dot');
+            var el = document.getElementById('status-dot');
             if (status === 'connected') {
                 el.className = 'status connected';
             } else {
@@ -62,54 +62,77 @@ HTML_INDEX = """
             }
         }
 
-        async function waitForUpdate() {
+        function makeRequest(method, url, callback, errorCallback) {
+            var xhr = new XMLHttpRequest();
+            xhr.open(method, url, true);
+            xhr.onreadystatechange = function() {
+                if (xhr.readyState === 4) {
+                    if (xhr.status === 200) {
+                        try {
+                            var data = JSON.parse(xhr.responseText);
+                            callback(data);
+                        } catch (e) {
+                            errorCallback(e);
+                        }
+                    } else if (xhr.status === 502) {
+                        // Server timeout, retry after delay
+                        setTimeout(function() {
+                            waitForUpdate();
+                        }, 1000);
+                    } else {
+                        errorCallback(new Error('Request failed'));
+                    }
+                }
+            };
+            xhr.send();
+        }
+
+        function waitForUpdate() {
             setStatus('connected');
-            try {
-                const response = await fetch(`/api/poll?hash=${currentHash}`);
-                if (response.status == 502) {
-                    await new Promise(r => setTimeout(r, 1000));
-                    waitForUpdate();
-                    return;
+            makeRequest('GET', '/api/poll?hash=' + currentHash, 
+                function(data) {
+                    if (data.changed) {
+                        window.location.reload();
+                    } else {
+                        waitForUpdate();
+                    }
+                },
+                function(error) {
+                    setStatus('disconnected');
+                    setTimeout(waitForUpdate, 5000);
                 }
-                const data = await response.json();
-                if (data.changed) {
-                    window.location.reload();
-                } else {
-                    waitForUpdate();
-                }
-            } catch (e) {
-                setStatus('disconnected');
-                setTimeout(waitForUpdate, 5000);
-            }
+            );
         }
 
         // T-MINUS COUNTDOWN LOGIC (Updates every 60s)
         function updateCountdown() {
             if (!nextTargetStr || nextTargetStr === 'None') return;
 
-            const target = new Date(nextTargetStr);
-            const now = new Date();
-            const diff = target - now;
+            var target = new Date(nextTargetStr);
+            var now = new Date();
+            var diff = target - now;
 
-            const el = document.getElementById('countdown-display');
+            var el = document.getElementById('countdown-display');
             if (!el) return;
 
             if (diff <= 0) {
-                el.innerText = "NOW";
+                el.innerHTML = "NOW";
                 el.className = "countdown blinking";
                 return;
             }
 
-            const totalMinutes = Math.floor(diff / (1000 * 60));
-            const hours = Math.floor(totalMinutes / 60);
-            const minutes = totalMinutes % 60;
+            var totalMinutes = Math.floor(diff / (1000 * 60));
+            var hours = Math.floor(totalMinutes / 60);
+            var minutes = totalMinutes % 60;
 
             // Format: "T- 1h 45m" or just "T- 45m" if less than an hour
+            var timeText;
             if (hours > 0) {
-                el.innerText = `T- ${hours}h ${minutes}m`;
+                timeText = "T- " + hours + "h " + minutes + "m";
             } else {
-                el.innerText = `T- ${minutes}m`;
+                timeText = "T- " + minutes + "m";
             }
+            el.innerHTML = timeText;
             
             // Blink if less than 5 minutes
             if (hours === 0 && minutes < 5) {
@@ -119,19 +142,29 @@ HTML_INDEX = """
             }
         }
 
-        window.addEventListener('load', () => {
+        function onWindowLoad() {
             waitForUpdate();
+            
             // Align the update to the start of the next minute for precision
-            const now = new Date();
-            const secondsUntilNextMinute = 60 - now.getSeconds();
+            var now = new Date();
+            var secondsUntilNextMinute = 60 - now.getSeconds();
             
             updateCountdown(); // Run immediately on load
             
-            setTimeout(() => {
+            setTimeout(function() {
                 updateCountdown();
                 setInterval(updateCountdown, 60000); // Run every 60s thereafter
             }, secondsUntilNextMinute * 1000);
-        });
+        }
+
+        // Cross-browser event listener
+        if (window.addEventListener) {
+            window.addEventListener('load', onWindowLoad, false);
+        } else if (window.attachEvent) {
+            window.attachEvent('onload', onWindowLoad);
+        } else {
+            window.onload = onWindowLoad;
+        }
     </script>
     <style>
         body { 
@@ -141,32 +174,65 @@ HTML_INDEX = """
             text-align: center; 
             margin: 0; 
             padding: 20px; 
-            display: flex; 
-            flex-direction: column; 
-            height: 95vh; 
+        }
+        
+        .container {
+            display: table;
+            width: 100%;
+            height: 95vh;
+            table-layout: fixed;
         }
         
         .header { 
+            display: table-row;
             margin-bottom: 20px; 
             border-bottom: 2px solid #333; 
             padding-bottom: 20px; 
         }
+        
+        .header-content {
+            display: table-cell;
+            vertical-align: top;
+            padding-bottom: 20px;
+            border-bottom: 2px solid #333;
+        }
+        
         .goal { font-size: 2.5em; font-weight: bold; color: #fff; margin: 0; text-transform: uppercase; letter-spacing: 2px; }
         .reason { font-size: 1.4em; color: #888; margin-top: 10px; font-style: italic; }
 
-        .cal-container { margin-top: 20px; display: flex; align-items: center; justify-content: center; gap: 15px; }
-        .cal-text { font-size: 1.5em; font-family: monospace; color: #0ff; }
-        .cal-bar-bg { width: 300px; height: 10px; background: #333; border-radius: 5px; overflow: hidden; }
-        .cal-bar-fill { height: 100%; background: #0ff; transition: width 0.5s; }
+        .cal-container { margin-top: 20px; text-align: center; }
+        .cal-text { font-size: 1.5em; font-family: monospace; color: #0ff; display: inline-block; margin-right: 15px; }
+        .cal-bar-bg { 
+            width: 300px; 
+            height: 10px; 
+            background: #333; 
+            border-radius: 5px; 
+            overflow: hidden; 
+            display: inline-block;
+            vertical-align: middle;
+            position: relative;
+        }
+        .cal-bar-fill { 
+            height: 100%; 
+            background: #0ff; 
+            transition: width 0.5s;
+            position: absolute;
+            left: 0;
+            top: 0;
+        }
         .cal-bar-fill.warning { background: #f00; }
 
         .content { 
-            flex-grow: 1; 
-            display: flex; 
-            flex-direction: column; 
-            justify-content: flex-start; 
-            margin-top: 20px;
+            display: table-row;
+            height: 100%;
         }
+        
+        .content-cell {
+            display: table-cell;
+            vertical-align: top;
+            padding-top: 20px;
+        }
+        
         .reminder { 
             font-size: 4em; 
             margin-bottom: 25px; 
@@ -186,67 +252,100 @@ HTML_INDEX = """
             font-family: monospace;
             font-weight: bold;
         }
-        .blinking { animation: blinker 1s linear infinite; color: #f00; }
+        .blinking { 
+            -webkit-animation: blinker 1s linear infinite;
+            -moz-animation: blinker 1s linear infinite;
+            animation: blinker 1s linear infinite; 
+            color: #f00; 
+        }
+        @-webkit-keyframes blinker { 50% { opacity: 0; } }
+        @-moz-keyframes blinker { 50% { opacity: 0; } }
         @keyframes blinker { 50% { opacity: 0; } }
 
-        .more { color: #555; font-size: 1.5em; margin-top: auto; }
+        .more { color: #555; font-size: 1.5em; margin-top: 50px; }
         .empty { color: #444; margin-top: 100px; font-size: 2em; }
         
         .status { position: fixed; bottom: 10px; right: 10px; width: 12px; height: 12px; border-radius: 50%; }
-        .status.connected { background: #004400; box-shadow: 0 0 5px #0f0; opacity: 0.6; }
-        .status.disconnected { background: #f00; box-shadow: 0 0 10px #f00; opacity: 1; }
+        .status.connected { 
+            background: #004400; 
+            -webkit-box-shadow: 0 0 5px #0f0; 
+            -moz-box-shadow: 0 0 5px #0f0; 
+            box-shadow: 0 0 5px #0f0; 
+            opacity: 0.6; 
+        }
+        .status.disconnected { 
+            background: #f00; 
+            -webkit-box-shadow: 0 0 10px #f00; 
+            -moz-box-shadow: 0 0 10px #f00; 
+            box-shadow: 0 0 10px #f00; 
+            opacity: 1; 
+        }
+        
+        /* Better mobile support */
+        @media (max-width: 768px) {
+            body { padding: 10px; }
+            .goal { font-size: 2em; }
+            .reminder { font-size: 3em; }
+            .cal-bar-bg { width: 200px; }
+        }
     </style>
 </head>
 <body>
-    {% if goal or reason or calorie_target %}
-    <div class="header">
-        {% if goal %}<div class="goal">{{ goal }}</div>{% endif %}
-        {% if reason %}<div class="reason">{{ reason }}</div>{% endif %}
-        
-        {% if calorie_target %}
-        <div class="cal-container">
-            <div class="cal-text">{{ calories_eaten }} / {{ calorie_target }} kcal</div>
-            <div class="cal-bar-bg">
-                <div class="cal-bar-fill {% if calories_eaten > calorie_target %}warning{% endif %}" 
-                     style="width: {{ (calories_eaten / calorie_target * 100)|round|int }}%;"></div>
+    <div class="container">
+        {% if goal or reason or calorie_target %}
+        <div class="header">
+            <div class="header-content">
+                {% if goal %}<div class="goal">{{ goal }}</div>{% endif %}
+                {% if reason %}<div class="reason">{{ reason }}</div>{% endif %}
+                
+                {% if calorie_target %}
+                <div class="cal-container">
+                    <div class="cal-text">{{ calories_eaten }} / {{ calorie_target }} kcal</div>
+                    <div class="cal-bar-bg">
+                        <div class="cal-bar-fill {% if calories_eaten > calorie_target %}warning{% endif %}" 
+                             style="width: {{ (calories_eaten / calorie_target * 100)|round|int }}%;"></div>
+                    </div>
+                </div>
+                {% endif %}
             </div>
         </div>
         {% endif %}
-    </div>
-    {% endif %}
 
-    <div class="content">
-        {% if display_reminders %}
-            {% for r in display_reminders %}
-                <div class="reminder">
-                    <span class="time">{{ r.time_str }}</span>
-                    <span class="desc">{{ r.description }}</span>
-                    
-                    {% if loop.index0 == 0 %}
-                        <span id="countdown-display" class="countdown">
-                        {% if time_diff_minutes is not none %}
-                            {% if time_diff_minutes <= 0 %}
-                                NOW
-                            {% else %}
-                                T- 
-                                {% if time_diff_minutes >= 60 %}
-                                    {{ (time_diff_minutes // 60)|int }}h {{ (time_diff_minutes % 60)|int }}m
-                                {% else %}
-                                    {{ time_diff_minutes|int }}m
+        <div class="content">
+            <div class="content-cell">
+                {% if display_reminders %}
+                    {% for r in display_reminders %}
+                        <div class="reminder">
+                            <span class="time">{{ r.time_str }}</span>
+                            <span class="desc">{{ r.description }}</span>
+                            
+                            {% if loop.index0 == 0 %}
+                                <span id="countdown-display" class="countdown">
+                                {% if time_diff_minutes is not none %}
+                                    {% if time_diff_minutes <= 0 %}
+                                        NOW
+                                    {% else %}
+                                        T- 
+                                        {% if time_diff_minutes >= 60 %}
+                                            {{ (time_diff_minutes // 60)|int }}h {{ (time_diff_minutes % 60)|int }}m
+                                        {% else %}
+                                            {{ time_diff_minutes|int }}m
+                                        {% endif %}
+                                    {% endif %}
                                 {% endif %}
+                                </span>
                             {% endif %}
-                        {% endif %}
-                        </span>
-                    {% endif %}
-                </div>
-            {% endfor %}
-        {% else %}
-            <div class="empty">Nothing to endure right now.</div>
-        {% endif %}
+                        </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="empty">Nothing to endure right now.</div>
+                {% endif %}
 
-        {% if remaining_count > 0 %}
-            <div class="more">+ {{ remaining_count }} more items later</div>
-        {% endif %}
+                {% if remaining_count > 0 %}
+                    <div class="more">+ {{ remaining_count }} more items later</div>
+                {% endif %}
+            </div>
+        </div>
     </div>
 
     <div id="status-dot" class="status connected" title="Connection Status"></div>
@@ -260,20 +359,42 @@ HTML_EDIT = """
 <head>
     <title>Edit Plan</title>
     <style>
-        body { background: #111; color: #fff; font-family: monospace; margin: 0; display: flex; flex-direction: column; height: 100vh; }
-        form { flex-grow: 1; display: flex; flex-direction: column; padding: 20px; }
-        textarea { flex-grow: 1; background: #222; color: #0f0; border: 1px solid #444; padding: 15px; font-size: 16px; font-family: monospace; resize: none; }
+        body { background: #111; color: #fff; font-family: monospace; margin: 0; }
+        .container { height: 100vh; display: table; width: 100%; }
+        form { display: table-cell; vertical-align: top; padding: 20px; }
+        textarea { 
+            width: 100%; 
+            height: 80vh; 
+            background: #222; 
+            color: #0f0; 
+            border: 1px solid #444; 
+            padding: 15px; 
+            font-size: 16px; 
+            font-family: monospace; 
+            resize: none;
+            box-sizing: border-box;
+        }
         .bar { padding: 10px 0; text-align: right; }
-        button { padding: 10px 30px; background: #0066cc; color: white; border: none; font-size: 16px; cursor: pointer; }
+        button { 
+            padding: 10px 30px; 
+            background: #0066cc; 
+            color: white; 
+            border: none; 
+            font-size: 16px; 
+            cursor: pointer; 
+        }
+        button:hover { background: #0088ee; }
     </style>
 </head>
 <body>
-    <form method="POST">
-        <div class="bar">
-            <button type="submit" name="save">Save Changes</button>
-        </div>
-        <textarea name="content" spellcheck="false">{{ content }}</textarea>
-    </form>
+    <div class="container">
+        <form method="POST">
+            <div class="bar">
+                <button type="submit" name="save">Save Changes</button>
+            </div>
+            <textarea name="content" spellcheck="false">{{ content }}</textarea>
+        </form>
+    </div>
 </body>
 </html>
 """
@@ -471,7 +592,7 @@ def main():
     parser.add_argument('--debug', action='store_true', help='Debug mode')
     args = parser.parse_args()
 
-    print(f"Starting Endurance Server on http://{args.host}:{args.port}")
+    print("Starting Endurance Server on http://{}:{}".format(args.host, args.port))
     app.run(debug=args.debug, host=args.host, port=args.port, threaded=True)
 
 if __name__ == '__main__':
